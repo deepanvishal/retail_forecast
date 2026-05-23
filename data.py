@@ -45,11 +45,11 @@ SHORT_LABELS = {
 # Internal keys (base, ols, …) are unchanged; these names are for display only.
 METHOD_LABELS = {
     'base':        'Base (no reconciliation)',
-    'ols':         'OLS — equal weights',
+    'ols':         'OLS - equal weights',
     'wls_raw':     'WLS-raw (absolute variance, diagonal)',
     'wls_scaled':  'WLS-scaled (relative variance, diagonal)',
     'mint_raw':    'MinT-raw (absolute covariance, full)',
-    'mint_scaled': 'MinT-scaled (relative covariance, full) — shipped',
+    'mint_scaled': 'MinT-scaled (relative covariance, full) [shipped]',
 }
 
 _DATE_FMT = '%m/%d/%y'
