@@ -180,7 +180,9 @@ def main(skip_notebooks=False):
     print(f'\nFuture base incoherence (agg gap as % of agg pred):')
     print(f'  Days where cohortA+B > aggregate: {n_over}/351')
     print(f'  Median gap %: {np.median(gaps_agg_pct):.1f}%  Mean: {gaps_agg_pct.mean():.1f}%')
-    print(f'  -> All reconciliation deltas are NEGATIVE (aggregate acts as upper constraint)')
+    print(f'  -> Mechanism: high positive C correlations -> negative W^-1 off-diagonals')
+    print(f'     -> subtractive GLS signal for upper levels -> reconciled agg BELOW base agg')
+    print(f'     -> this is calibration-range extrapolation (train max gap was ~2%; future median {np.median(gaps_agg_pct):.1f}%)')
 
     print('\nMean absolute delta % per series (sorted by movement):')
     print(who_moved_df[['label', 'relative_variance', 'rel_var_rank',

@@ -3,263 +3,264 @@
 ## 1. Hierarchy and Summing Matrix
 
 Seven time-series form a 3-level hierarchy with three accounting identities:
-
-```
-aggregate = cohort_A + cohort_B
-cohort_A  = A1 + A2
-cohort_B  = B1 + B2
-```
-
+`aggregate = cohort_A + cohort_B`, `cohort_A = A1 + A2`, `cohort_B = B1 + B2`.
 The 7×4 summing matrix S maps the 4 leaves [A1, A2, B1, B2] to all 7 series.
-Any coherent forecast vector can be written `ytilde = S @ b` for some leaf vector `b`,
-which is the key insight enabling exact coherence by construction.
+Any coherent forecast vector is written `ytilde = S @ b`, so coherence holds
+by construction once b is found.
 
 ## 2. Methodology
 
-### 2.1 Why Reconciliation is Needed
+### 2.1 W Estimation via Relative Residuals and Per-Day Rescaling
 
-Base predictions violate all three identities on every day.  Train-period aggregate
-gap: mean ≈ 13k, max ≈ 463k.  Future-period aggregate gap: mean ≈ 2.2M, max ≈ 56M.
-The future incoherence is ~170× larger than the train incoherence, consistent with
-the ~10× volume growth and the longer forecast horizon of the future block.
-Train actuals are perfectly coherent (gaps < 4×10⁻⁹, floating-point only).
-
-### 2.2 Covariance Estimation via Relative Residuals
-
-**Why relative (scaled) residuals:**
-`corr(|residual|, level=pred)` ranges 0.62–0.73 across all 7 series; with
-`level=actual` the range is 0.67–0.82.  Both definitions confirm strong positive
-heteroscedasticity.  The pred-based number is operationally relevant: at forecast
-time only predictions are available.  The actual-based number is slightly higher
-because actual = pred + residual, so actual additionally carries the residual's
-own magnitude; in this data, where both pred and actual track the same volume driver,
-this raises the correlation — but this is an empirical tendency specific to these
-data, not a mathematical guarantee.
+**Why relative residuals:** `corr(|residual|, level=pred)` is 0.62–0.73 across
+all 7 series; with `level=actual` the range is 0.67–0.82.  Both confirm strong
+positive heteroscedasticity.  The pred-based number is operationally relevant
+because actuals are unavailable at forecast time.  The actual-based number is
+slightly higher because actual embeds the residual — in this data both track the
+same volume driver, making the ordering an empirical tendency, not a mathematical
+identity.
 
 Aggregate monthly mean grows ~10× over 3 years (~855k to ~8.4M mean daily), with
-November peaks of 4.9M / 7.5M / 13.7M YoY.  A single absolute covariance W would
-be dominated by high-volume days; relative residuals `r = (actual - pred) / pred`
-stabilise the variance across the volume range.
+November peaks of 4.9M → 7.5M → 13.7M YoY.  A single absolute covariance W
+would be dominated by high-volume days.  Relative residuals
+`r = (actual − pred) / pred` stabilise variance across the volume range.
 
-**Per-day rescaling:**
-Given relative covariance C (estimated once from all train data), we build a
-day-specific matrix `W_day = diag(pred_day) @ C @ diag(pred_day)` using that day's
-base prediction vector.  This makes the error variance proportional to the squared
-scale of each day's predictions, matching the heteroscedastic structure.  Actuals
-are unavailable at forecast time, so the rescaling uses pred — the only operationally
-consistent choice.
+**Per-day rescaling:** `W_day = diag(pred_day) @ C @ diag(pred_day)`.  C is the
+relative covariance estimated once from all 1112 train rows; pred_day is that
+day's base-prediction vector.  This makes the error variance proportional to the
+squared scale of each day's predictions.
 
-**Schäfer–Strimmer shrinkage:**
+### 2.2 Schäfer–Strimmer Shrinkage
+
 The sample correlation matrix is shrunk analytically toward the diagonal target
-(keep variances; shrink off-diagonal correlations toward 0).  This regularises the
-covariance estimate, stabilises W's inverse, and protects the engine in small-window
-and regime-shift settings.  The analytic shrinkage intensity is derived to minimise
-the expected Frobenius loss of the correlation estimator under IID sampling.
+(keep variances; shrink off-diagonal correlations toward 0), using the closed-form
+intensity λ that minimises the expected Frobenius loss under IID sampling.
 
-On this dataset (n=1112, p=7, n/p≈159), the analytic λ=0.0136.  Shrinkage barely
-engages; it is retained as a safety net.
+On this dataset (n=1112, p=7): **λ = 0.0136**.  Shrinkage barely engages; it is
+retained as a stability safety net for small windows.  The SS formula assumes IID
+samples; with lag-1 residual autocorrelation 0.34–0.56, the analytic λ likely
+understates the warranted shrinkage.  A sensitivity check (Appendix A) shows the
+inflated λ is still negligible on this data.
 
-**Important nuance:** The SS formula assumes IID samples.  The train residuals are
-autocorrelated (lag-1 0.34–0.56 across series), which reduces the effective sample
-size.  The effective n estimated from the lag-1 autocorrelation of the cross-product
-series Z_i·Z_j — the quantity the covariance estimator formally depends on — gives
-n_eff ≈ 938 and an inflated λ ≈ 0.016.  Using the level-residual autocorrelation as
-a proxy (more conservative; tends to overstate the reduction) gives n_eff ≈ 635
-and λ ≈ 0.024.  In either case the inflated lambda is negligible and changes
-reconciled outputs immaterially.
+### 2.3 Full 7×7 W
 
-**Full 7×7 W (not leaves-only):**
-Including aggregate and cohort forecasts in the GLS objective uses the information
-that some levels are better or worse calibrated than others.  Dropping these rows
-would discard signal.
+All 7 series — including aggregate and cohort levels — are included in the GLS
+objective.  This uses the reliability signal from every level rather than leaves
+only.  An important consequence is discussed in §5: because aggregate has the
+largest prediction magnitude, it also has the largest absolute variance
+(diag(W_day)), making it the **least trusted** series in the GLS, not an anchor.
 
-### 2.3 MinT/GLS Reconciliation
+### 2.4 MinT/GLS Closed Form
 
-The GLS closed form is:
 ```
 ytilde = S (S^T W^{-1} S)^{-1} S^T W^{-1} yhat
 ```
-solved via two linear systems (W is never explicitly inverted):
-```python
-WinvS = np.linalg.solve(W, S)          # 7x4
-A     = S.T @ WinvS                     # 4x4
-b     = np.linalg.solve(A, WinvS.T @ yhat)
-ytilde = S @ b
-```
+Solved via two linear systems; W is never explicitly inverted.
 
-### 2.4 Nonnegativity via NNLS QP and Summation Rebuild
+### 2.5 Nonnegativity via NNLS QP and Summation Rebuild
 
-The constrained QP over the 4 leaves:
-```
-minimise  (Sb - yhat)^T W^{-1} (Sb - yhat)   s.t.  b >= 0
-```
-is solved as nonnegative least squares by factoring W = LL^T (Cholesky) and passing
-`M = L^{-1}S, d = L^{-1}yhat` to `scipy.optimize.nnls`.  All 7 output series are
-rebuilt as `ytilde = S @ b`, ensuring all three hierarchy identities hold to
-floating-point precision by construction.
+The QP `min (Sb−yhat)^T W^{-1} (Sb−yhat) s.t. b≥0` is solved as NNLS after
+Cholesky-factoring W.  All levels are rebuilt as `ytilde = S @ b`, so all three
+identities hold to floating-point precision by construction.
 
-## 3. Validation Results
+## 3. Validation
 
 | Check | Result | Status |
 |---|---|---|
-| Max abs identity violation | < 1×10⁻¹⁰ | PASSED (tol 1×10⁻⁶) |
-| Min leaf value | > 480k | PASSED (≥ 0) |
+| Max abs identity violation | 1.1×10⁻⁸ (relative: 2.3×10⁻¹⁶) | PASSED (tol 1×10⁻⁶) |
+| Min leaf value | 155,135 | PASSED (≥ 0) |
 | QP binding days (future) | 0 / 351 | PASSED |
 | QP binding days (backtest) | 0 / 747 | PASSED |
-| NNLS vs closed-form MinT | < 1×10⁻⁴ (numerical) | Identical when QP not binding |
-| Output shape | 351 × 7 | PASSED |
-| NaN count | 0 | PASSED |
+| NNLS vs closed-form MinT | max dev 3.1×10⁻⁷ | Equivalent |
+| Output shape / NaN | 351 × 7, 0 NaNs | PASSED |
 
-Condition numbers (approximate, depends on magnitude of future preds):
-- C (relative covariance, 7×7): well-conditioned given n/p≈159 and SS shrinkage
-- W_day at median future pred: scales with pred² but inherits C's structure
+Condition numbers: C (relative covariance) ≈ 400; W_day ranges 460–3,200 across
+future days, including the November 2026 peak (750 on the peak day).
 
 ## 4. Backtest Results
 
 Rolling-origin expanding window, min 365 training rows, W estimated from past-only
-data at each of 747 origins.  All methods use the same MinT/GLS formula; W varies.
+data at each of 747 origins.
 
-| Method | Overall MAPE % | Note |
+| Method | Overall MAPE % | Peak-quintile MAPE % |
 |---|---|---|
-| base | ~9.8% | Incoherent baseline |
-| ols (W=I) | ~10.7% | Only method that measurably hurts |
-| wls_raw (diag, abs) | ~9.8% | Marginal improvement |
-| wls_scaled (diag, relative) | ~9.8% | Comparable to base |
-| mint_raw (full, abs) | ~9.8% | Marginal |
-| **mint_scaled (full, relative)** | **~9.8%** | **Defensible pick** |
+| base | 9.81% | 10.72% |
+| ols (W=I) | 9.91% | 10.74% |
+| wls_scaled (diag) | 9.81% | 10.79% |
+| **mint_scaled (full-W, shipped)** | **9.81%** | **11.05%** |
 
-**Headline:** Reconciliation delivers coherence at essentially no accuracy cost.
-This is not an accuracy-improvement play; it is a structural correctness guarantee.
+In-sample vs OOS W optimism gap: 0.025% — negligible.
 
-**OLS uniquely hurts (~−1%)** because W=I treats all series symmetrarily and ignores
-the strong positive correlations — it pushes leaves and aggregates toward an
-unweighted average that overrides reliable signals with unreliable ones.
-
-**In-sample vs OOS W optimism gap: ~0.025%** — negligible.  The covariance-window
-effect is small.  The deeper concern (see §6) cannot be measured here.
-
-**Horizon caveat:** The backtest scores one train-period prediction at a time.
-The future block spans 351 days; the error covariance at h=351 may differ from the
-~1-step (or unknown-horizon) train residuals.  The backtest validates mechanics and
-method ranking, not the long-horizon error structure.
+**Headline:** Reconciliation delivers exact coherence.  On average it is
+accuracy-neutral vs base (within 0.1% MAPE across 7 series).  On peak-volume
+days (top quintile, most analogous to the November–December 2026 future period),
+mint_scaled degrades median aggregate APE by **+0.25 percentage points** vs base.
+This is the honest qualification of the "no accuracy cost" claim; see §5 for the
+mechanism.
 
 ## 5. Impact Analysis
 
 ### 5.1 Structure of Future Incoherence
 
-A critical finding drives the impact analysis: the future base predictions are
-structurally incoherent in a systematic direction.  On **347 of 351 future days**,
-the sum of the base cohort predictions exceeds the base aggregate prediction.
-The median gap is **17.7% of the aggregate prediction** (vs 0.41% on train days).
-On the 9 most extreme days the cohort predictions collectively exceed the aggregate
-by 50–58%, concentrated in November–December 2026 — consistent with independently-
-fitted sub-models diverging at long forecast horizons.
+The future base predictions are structurally incoherent in a systematic direction:
+on **349 of 351 future days**, the sum of the base cohort predictions exceeds the
+base aggregate prediction.
 
-The consequence is that reconciliation **consistently adjusts all series downward**.
-The aggregate prediction acts as an upper constraint, and the GLS redistributes
-the excess cohort/leaf predictions downward to achieve coherence.
+| Gap | Median % of parent | Max |
+|---|---|---|
+| g_top = cohA+cohB − agg | **+17.7%** | +57.6% |
+| g_cohA = A1+A2 − cohA | +2.1% | +14.1% |
+| g_cohB = B1+B2 − cohB | +10.6% | +22.1% |
+| g_leaf = leaves − agg | **+24.8%** | +55.1% |
 
-### 5.2 Who Moved and Why
+The training data **never** had a top-level gap exceeding 2.0%.  The future median
+gap of 17.7% is therefore 9–40× outside the incoherence regime in which W was
+estimated.
 
-Median reconciliation deltas across the 351 future days:
+### 5.2 Where the Reconciled Aggregate Lands
 
-| Series | Median delta % | Relative variance | Reliability rank |
-|---|---|---|---|
-| aggregate | −37% | 0.021 | 6 (more trusted) |
-| cohort_A | −41% | 0.027 | 3 |
-| cohort_B | −53% | 0.019 | 7 (most trusted) |
-| A1 | −37% | 0.028 | 2 |
-| A2 | −56% | 0.044 | 1 (least trusted) |
-| B1 | −51% | 0.024 | 5 |
-| B2 | −64% | 0.025 | 4 |
+| Location | Count |
+|---|---|
+| Reconciled aggregate **below** base aggregate | **339/351 (96.6%)** |
+| Reconciled aggregate between base agg and cohort sum | 12/351 (3.4%) |
+| Reconciled aggregate above cohort sum | 0/351 |
 
-Movement size is driven jointly by: (a) a series's own reliability (A2 least trusted,
-moves most); and (b) the extent to which its base prediction contributes to the
-directional incoherence.  cohort_B is the most reliable series but still shows a
-large delta (−53%) because B1+B2 > cohort_B on most future days — the GLS must
-reconcile this cross-level incoherence even while trusting cohort_B's own prediction.
+Aggregate delta distribution: median **−37%**, p5 **−61%**, p95 **−0.7%**.
 
-### 5.3 Who Pulled Whom: Aggregate Pulled Cohorts Down
+### 5.3 Mechanism: Why the GLS Over-Corrects Downward
 
-The aggregate pulled the cohorts and leaves downward.  On 99% of future days, the
-base aggregate < sum of base cohorts.  Since the aggregate is relatively trusted
-(rel_var rank 6/7) and all off-diagonal correlations in C are positive (all series
-track the same volume driver), the GLS pulls the full hierarchy downward coherently.
+This result is not a sign-convention error or a reliability-justified pull toward
+the aggregate.  The mechanism is as follows.
 
-This is directionally opposite to a scenario where leaves pull the aggregate up
-(which would occur if leaf predictions were conservative relative to a high-volume
-aggregate forecast).  Here the base model appears to produce more aggressive
-sub-cohort forecasts than aggregate forecasts at longer horizons.
+**Aggregate is the least-trusted series in absolute W_day terms.**  diag(W_day) =
+pred² × diag(C).  Even though aggregate has the second-best relative reliability
+(diag(C) rank 2 of 7), its prediction magnitude dominates: aggregate's absolute
+variance is the largest on every future day (rank 7 of 7).  The GLS weights
+series by 1/W_day_ii; aggregate receives the smallest weight.
 
-### 5.4 Implication for Decision-Making
+**Negative W⁻¹ off-diagonal elements create a subtractive signal.**  C has high
+positive inter-series correlations (all pairs 0.30–0.96; dominant eigenvalue 4.95,
+capturing 71% of variance).  Inverting a matrix with large positive off-diagonal
+elements produces large negative off-diagonal elements in the inverse.  28 of 42
+off-diagonal elements of C⁻¹ are negative.  The row sums of W⁻¹ are negative for
+aggregate, cohort_A, and cohort_B — their net GLS signal is subtractive.
 
-The large negative deltas (median 35–64%) are not a numerical artefact — they
-reflect genuine structural incoherence in the future base predictions.  Whether the
-reconciled or raw forecasts are preferable depends on whether the aggregate (more
-conservative, top-down) or the cohort/leaf models (more aggressive, bottom-up) are
-believed to be better calibrated at the forecast horizon.
+**When all 7 series simultaneously predict high relative to the constraint**, the
+GLS interprets this as a large shared upward error in the common factor and
+over-corrects, pushing the reconciled aggregate well below any individual
+prediction.  With training gaps < 2%, this mechanism produced small, accurate
+corrections.  With future gaps of 17.7%+, it extrapolates strongly, pulling
+the reconciled aggregate below the base aggregate on 96.6% of days.
 
-## 6. Headline: Coherence at No Accuracy Cost
+This is confirmed by method comparison: OLS (W=I) and diagonal-W both place the
+reconciled aggregate *between* base aggregate and cohort sum on ≥ 98% of future
+days; only full-W produces the below-aggregate result.
 
-The reconciled forecasts satisfy all three hierarchy identities to machine precision
-on all 351 future days.  The rolling-origin backtest confirms that MinT-scaled
-achieves this without measurably degrading per-series accuracy vs the incoherent
-base forecasts (MAPE difference < 0.1% across all 7 series).
+### 5.4 Who Moved and How Much
+
+Mean absolute delta (%) across the 351 future days, sorted by movement:
+
+| Series | Rel. variance (diag C) | Abs W rank | Mean delta % | Mean \|delta\| % |
+|---|---|---|---|---|
+| B2 | 0.025 | 3 | −56.8% | 56.8% |
+| A2 | 0.044 | 1 (most trusted abs.) | −52.3% | 52.3% |
+| cohort_B | 0.019 | 5 | −48.4% | 48.4% |
+| B1 | 0.024 | 2 | −47.5% | 47.5% |
+| cohort_A | 0.027 | 6 | −37.7% | 37.7% |
+| aggregate | 0.021 | 7 (least trusted abs.) | −34.8% | 34.8% |
+| A1 | 0.028 | 4 | −34.5% | 34.5% |
+
+All deltas are negative (all series reduced) because the shared-factor over-correction
+operates symmetrically across the hierarchy.  The spread across series reflects both
+individual reliability and the cross-series correlation structure.
+
+### 5.5 Implication for Decision-Making
+
+The 35–57% downward adjustments are a mathematical consequence of applying a
+high-correlation W to an incoherence regime far outside its calibration range.
+The reconciled forecasts are exactly coherent and nonnegative.  Whether they
+are more useful than the raw base forecasts for decision-making depends on whether
+the base model's systematic sub-cohort over-prediction (relative to the aggregate)
+at long horizons is a genuine signal or a model artefact — a question the
+reconciler cannot answer.  The base model calibration should be investigated upstream.
+
+## 6. Headline: Coherence at No Average Accuracy Cost
+
+The reconciled forecasts satisfy all three hierarchy identities on all 351 future
+days (max violation 1.1×10⁻⁸; relative precision 2.3×10⁻¹⁶).  The rolling-origin
+backtest confirms accuracy is neutral on average (within 0.1% MAPE).
+
+**Qualification:** On peak-volume days (top quintile of training data, most analogous
+to the November 2026 future period), mint_scaled degrades median APE by +0.25pp vs
+base.  Diagonal-W (wls_scaled) is neutral on peak days.  See the method comparison
+report for a fuller analysis of the tradeoff.  The brief specifies full-W MinT; that
+is what ships.
 
 ## 7. Bias Disclosure
 
 Every series under-predicts on average: mean residual (actual − pred) is 1.1%–4.1%
-of mean pred level.  However, the base model over-predicts on more than 50% of days.
-The positive mean bias is driven by a small number of large under-shoots on
-high-volume days, not by frequency.  **Reconciliation cannot fix this bias.**
-It redistributes within-day across the hierarchy; the total daily forecast
-(sum of leaves = aggregate) is unchanged in expectation.
+of mean pred level.  The model over-predicts on >50% of days; the positive mean
+bias comes from a small number of large under-shoots on high-volume days.
+**Reconciliation cannot fix this bias** — it redistributes within-day across the
+hierarchy; the per-day total forecast is unchanged in expectation.
 
 ## 8. Required Question: Why Is In-Sample W a Poor Choice?
 
 ### (i) The general argument
 
-Estimating W from in-sample training residuals — where the base model was fitted on
-the same data — produces residuals that are optimistic in two ways:
+Estimating W from in-sample training residuals is problematic for two reasons.
 
-**Overfitting bias:** In-sample residuals are typically smaller and smoother than
-true forecast errors because the model has seen the training data.  A W estimated
-from these residuals understates the true forecast error covariance, leading the
-reconciliation to over-trust the base predictions and under-shrink toward the
-coherent subspace.
-
-**Non-IID / autocorrelated errors:** Training residuals are not independent draws
-from the error distribution; they are autocorrelated (here lag-1 ≈ 0.34–0.56).
-This means sequential residuals carry redundant information, overstating the
-effective sample size, and the analytic SS lambda underestimates the warranted
-shrinkage.
+**Overfitting bias:** in-sample residuals are smaller than genuine forecast errors
+because the base model was fitted on the same data.  W estimated from these residuals
+understates true forecast error covariance.
 
 **The correct approach** is to estimate W from **out-of-sample residuals** produced
-by a **rolling-origin backtest of the base forecasting models themselves**, generating
-predictions at the same horizon h as the intended reconciliation target.  For a
-351-day-ahead block, this means: hold out windows of 351 days, generate base-model
-forecasts from before each window, and use those h-step residuals to form W.
-This horizon-matching ensures W reflects the actual uncertainty structure at the
-forecast horizon, including the growth of error variance with h that is absent from
-1-step or in-sample residuals.
+by a rolling-origin backtest of the base forecasting models at the same horizon h
+as the intended reconciliation target.  For a 351-day-ahead block, this means:
+hold out 351-day windows, generate base-model h-step forecasts from before each
+window, and estimate W from those genuine h-step residuals.  This ensures W reflects
+the true uncertainty at the forecast horizon, including error-variance growth with h.
 
-### (ii) Honest dataset-specific limitation
+### (ii) Dataset-specific limitation
 
-This dataset provides fixed, precomputed base predictions for both the train and future
-periods; the base models cannot be refit.  This means:
+This dataset provides fixed precomputed base predictions; the base models cannot
+be refit.  Therefore:
 
-- **The deep optimism** (whether train residuals are in-sample fits vs genuine rolling OOS
-  forecasts at some unknown horizon) can be reasoned about but not measured.
+- **The deep optimism** (whether train residuals are in-sample fits vs genuine rolling
+  OOS forecasts) can be reasoned about but not measured.
+- **The covariance-window effect** (past-only vs full-train C) was isolated at ~0.025%
+  optimism — negligible.
+- **The horizon mismatch** between train residuals (unknown horizon, likely short)
+  and the future block (up to 351 days) is the dominant unquantified risk.  The
+  systematic future incoherence (median 17.7% gap, absent from training) is likely
+  a manifestation of this mismatch: at longer horizons, independently-fitted
+  sub-models diverge more than the aggregate model.  W was not calibrated for this
+  regime and cannot be validated against it.
 
-- **What we can isolate** is the covariance-window effect: using full-train C (peeking at
-  all train data) vs past-only C at each rolling origin.  This gap is ~0.025% — negligible.
+---
 
-- **The horizon mismatch** between train-period residuals (unknown horizon, likely ≤ 1 year)
-  and the future block (up to 351 days, 2026-01-18 to 2027-01-03) is the dominant
-  unquantified risk.  If long-horizon errors are larger or differently correlated than
-  short-horizon errors, the W estimated here will misrepresent the true uncertainty,
-  causing the GLS to upweight or downweight series incorrectly.
+## Appendix A: Effective-n Sensitivity
 
-The backtest in this deliverable validates reconciliation mechanics and method ranking
-under the assumption that the train-period error structure is representative; it does
-not validate the long-horizon error covariance of the future block.
+The SS formula assumes IID samples.  With lag-1 residual autocorrelation 0.34–0.56,
+effective n is approximately 635–938 (depending on whether level-residual or
+cross-product autocorrelation is used as a proxy; the cross-product series — the
+quantity the covariance estimator formally depends on — gives n_eff ≈ 938).  At
+n_eff=938, the inflated λ ≈ 0.016; at n_eff=635, λ ≈ 0.024.  Both remain
+negligible and change reconciled outputs immaterially.  The level-residual proxy
+is more conservative (larger reduction in n_eff) and gives the upper bound.
+
+## Appendix B: Additional Diagnostics
+
+Three additional diagnostics were produced during development and are available in
+`figures/`:
+
+- **fig8_residual_tails.png:** QQ plots of relative residuals per series.  Heavy
+  tails (excess kurtosis > 0) confirm covariance-based MinT is an approximation;
+  it is statistically consistent but may under-weight tail events.  Log transform
+  would better handle multiplicative noise but breaks additive coherence
+  identities (log(aggregate) ≠ log(cohort_A) + log(cohort_B)); relative residuals
+  preserve both.
+- **fig9_rolling_stability.png:** 180-day rolling correlations for key series pairs.
+  Broadly stable over the training period; supports using the full-train C for the
+  future period.
+- **Effective-n sensitivity:** see Appendix A.
