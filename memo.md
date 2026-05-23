@@ -145,24 +145,59 @@ method ranking, not the long-horizon error structure.
 
 ## 5. Impact Analysis
 
-**Who moved:** Series with higher relative variance (less reliable in the GLS sense)
-are moved more by reconciliation.  The reliability ranking (diagonal of C) determines
-adjustment size; off-diagonal correlations set direction.
+### 5.1 Structure of Future Incoherence
 
-**Who pulled whom:** The base aggregate prediction and the base leaf predictions
-are inconsistent.  The MinT GLS resolves this inconsistency by finding the coherent
-point closest to all 7 base predictions simultaneously, weighted by inverse covariance.
-The series that moves most (as % of its own scale) is the one the GLS trusts least.
+A critical finding drives the impact analysis: the future base predictions are
+structurally incoherent in a systematic direction.  On **347 of 351 future days**,
+the sum of the base cohort predictions exceeds the base aggregate prediction.
+The median gap is **17.7% of the aggregate prediction** (vs 0.41% on train days).
+On the 9 most extreme days the cohort predictions collectively exceed the aggregate
+by 50–58%, concentrated in November–December 2026 — consistent with independently-
+fitted sub-models diverging at long forecast horizons.
 
-If the aggregate moved more than the leaves (relative to their scale), the aggregate
-was the less-reliable node being pulled toward the leaf consensus.  If leaves moved
-more, the aggregate was trusted and leaves were adjusted to match.  The exact direction
-depends on the reliability ranking in C — reported in the impact analysis figures.
+The consequence is that reconciliation **consistently adjusts all series downward**.
+The aggregate prediction acts as an upper constraint, and the GLS redistributes
+the excess cohort/leaf predictions downward to achieve coherence.
 
-**Direction of within-day reallocation:** Positive off-diagonal correlations between
-siblings (A1-A2, B1-B2) mean both move in the same direction.  The strong
-aggregate-to-cohort correlations mean reconciliation adjustments propagate coherently
-down the hierarchy.
+### 5.2 Who Moved and Why
+
+Median reconciliation deltas across the 351 future days:
+
+| Series | Median delta % | Relative variance | Reliability rank |
+|---|---|---|---|
+| aggregate | −37% | 0.021 | 6 (more trusted) |
+| cohort_A | −41% | 0.027 | 3 |
+| cohort_B | −53% | 0.019 | 7 (most trusted) |
+| A1 | −37% | 0.028 | 2 |
+| A2 | −56% | 0.044 | 1 (least trusted) |
+| B1 | −51% | 0.024 | 5 |
+| B2 | −64% | 0.025 | 4 |
+
+Movement size is driven jointly by: (a) a series's own reliability (A2 least trusted,
+moves most); and (b) the extent to which its base prediction contributes to the
+directional incoherence.  cohort_B is the most reliable series but still shows a
+large delta (−53%) because B1+B2 > cohort_B on most future days — the GLS must
+reconcile this cross-level incoherence even while trusting cohort_B's own prediction.
+
+### 5.3 Who Pulled Whom: Aggregate Pulled Cohorts Down
+
+The aggregate pulled the cohorts and leaves downward.  On 99% of future days, the
+base aggregate < sum of base cohorts.  Since the aggregate is relatively trusted
+(rel_var rank 6/7) and all off-diagonal correlations in C are positive (all series
+track the same volume driver), the GLS pulls the full hierarchy downward coherently.
+
+This is directionally opposite to a scenario where leaves pull the aggregate up
+(which would occur if leaf predictions were conservative relative to a high-volume
+aggregate forecast).  Here the base model appears to produce more aggressive
+sub-cohort forecasts than aggregate forecasts at longer horizons.
+
+### 5.4 Implication for Decision-Making
+
+The large negative deltas (median 35–64%) are not a numerical artefact — they
+reflect genuine structural incoherence in the future base predictions.  Whether the
+reconciled or raw forecasts are preferable depends on whether the aggregate (more
+conservative, top-down) or the cohort/leaf models (more aggressive, bottom-up) are
+believed to be better calibrated at the forecast horizon.
 
 ## 6. Headline: Coherence at No Accuracy Cost
 

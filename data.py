@@ -26,7 +26,7 @@ def load(path='forecast_data_anonymized.csv'):
     train = df[df['label'] == 'train'].reset_index(drop=True)
     future = df[df['label'] == 'future'].reset_index(drop=True)
 
-    gaps = train['date'].diff().dt.days.dropna()
+    gaps = train['date'].diff().dt.days.fillna(0)
     gap_info = {
         'max_gap_days': int(gaps.max()),
         'gap_dates': train['date'][gaps > 1].tolist(),

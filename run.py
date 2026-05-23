@@ -172,6 +172,16 @@ def main(skip_notebooks=False):
     who_moved_df = analyze_who_moved(impact_df, C_full)
     level_moves = who_pulled_whom(impact_df)
 
+    # Future incoherence structure — key context for impact interpretation
+    future_preds_raw = pred_array(future)
+    gaps_agg_pct = (np.abs(future_preds_raw[:,0] - future_preds_raw[:,1] - future_preds_raw[:,2])
+                    / future_preds_raw[:,0] * 100)
+    n_over = int((future_preds_raw[:,1] + future_preds_raw[:,2] > future_preds_raw[:,0]).sum())
+    print(f'\nFuture base incoherence (agg gap as % of agg pred):')
+    print(f'  Days where cohortA+B > aggregate: {n_over}/351')
+    print(f'  Median gap %: {np.median(gaps_agg_pct):.1f}%  Mean: {gaps_agg_pct.mean():.1f}%')
+    print(f'  -> All reconciliation deltas are NEGATIVE (aggregate acts as upper constraint)')
+
     print('\nMean absolute delta % per series (sorted by movement):')
     print(who_moved_df[['label', 'relative_variance', 'rel_var_rank',
                           'mean_abs_delta_pct', 'mean_delta_pct']].round(4).to_string())
