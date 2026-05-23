@@ -16,7 +16,7 @@ import pandas as pd
 import matplotlib
 matplotlib.use('Agg')
 
-from data import SERIES, LEAVES, S, load, pred_array, actual_array
+from data import SERIES, LEAVES, S, load, pred_array, actual_array, METHOD_LABELS
 from covariance import (
     relative_residuals, schafer_strimmer, build_W_day,
     condition_report, effective_n_sensitivity
@@ -87,8 +87,8 @@ def main(skip_notebooks=False):
     W_sample = build_W_day(C_full, med_pred)
     cond = condition_report(C_full, W_sample)
     print(f'\nCondition numbers:')
-    print(f'  C (relative covariance): {cond["cond_C"]:.2e}')
-    print(f'  W_day (median future pred): {cond["cond_W_day_sample"]:.2e}')
+    print(f'  C (relative forecast-error covariance): {cond["cond_C"]:.2e}')
+    print(f'  W_day (median future forecast): {cond["cond_W_day_sample"]:.2e}')
 
     figs = eda.run_all(train, future, C_full, save_dir=FIGURES_DIR)
     for fig in figs:
@@ -106,8 +106,10 @@ def main(skip_notebooks=False):
           f"min={meta['lambda_min']:.5f}  max={meta['lambda_max']:.5f}")
     print(f"Neg-leaf days (unconstrained mint_scaled): {meta['neg_leaf_count']}/{meta['n_iter']}")
     print()
-    print(summary_df[['overall_mape']].rename(
-        columns={'overall_mape': 'MAPE % (7-series mean)'}).round(4).to_string())
+    disp = summary_df[['overall_mape']].rename(
+        columns={'overall_mape': 'MAPE % (7-series mean)'})
+    disp.index = [METHOD_LABELS.get(m, m) for m in disp.index]
+    print(disp.round(4).to_string())
 
     results_df.to_csv(BACKTEST_CSV, index=False)
     print(f'\nPer-day backtest results saved to {BACKTEST_CSV}')
@@ -184,13 +186,21 @@ def main(skip_notebooks=False):
     print(f'     -> subtractive GLS signal for upper levels -> reconciled agg BELOW base agg')
     print(f'     -> this is calibration-range extrapolation (train max gap was ~2%; future median {np.median(gaps_agg_pct):.1f}%)')
 
-    print('\nMean absolute delta % per series (sorted by movement):')
-    print(who_moved_df[['label', 'relative_variance', 'rel_var_rank',
-                          'mean_abs_delta_pct', 'mean_delta_pct']].round(4).to_string())
+    print('\nMean absolute adjustment (% of base forecast) per series, sorted by movement:')
+    disp_moved = who_moved_df[['label', 'relative_variance', 'rel_var_rank',
+                                'mean_abs_delta_pct', 'mean_delta_pct']].copy()
+    disp_moved.columns = ['Series', 'Relative forecast-error variance',
+                           'Reliability rank', 'Mean |adjustment| %', 'Mean adjustment %']
+    print(disp_moved.round(4).to_string())
 
-    print('\nMean |delta %| by hierarchy level:')
+    print('\nMean absolute adjustment (%) by hierarchy level:')
+    level_names = {
+        'level_0_mean_abs_delta_pct': 'Total (level 0)',
+        'level_1_mean_abs_delta_pct': 'Cohort average (level 1)',
+        'level_2_mean_abs_delta_pct': 'Leaf average (level 2)',
+    }
     for k, v in level_moves.items():
-        print(f'  {k}: {v:.4f}%')
+        print(f'  {level_names.get(k, k)}: {v:.4f}%')
 
     import matplotlib.pyplot as plt
     for fig in [
